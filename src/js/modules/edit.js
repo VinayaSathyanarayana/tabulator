@@ -104,6 +104,10 @@ Edit.prototype.cancelEdit = function(){
 		cell.setValueActual(cell.getValue());
 		cell.cellRendered();
 
+		if(cell.column.definition.editor == "textarea" || cell.column.definition.variableHeight){
+			cell.row.normalizeHeight(true);
+		}
+
 		if(cell.column.cellEvents.cellEditCancelled){
 			cell.column.cellEvents.cellEditCancelled.call(this.table, component);
 		}
@@ -115,7 +119,7 @@ Edit.prototype.cancelEdit = function(){
 //return a formatted value for a cell
 Edit.prototype.bindEditor = function(cell){
 	var self = this,
-	element = cell.getElement();
+	element = cell.getElement(true);
 
 	element.setAttribute("tabindex", 0);
 
@@ -126,7 +130,11 @@ Edit.prototype.bindEditor = function(cell){
 	});
 
 	element.addEventListener("mousedown", function(e){
-		self.mouseClick = true;
+		if (e.button === 2) {
+			e.preventDefault();
+		}else{
+			self.mouseClick = true;
+		}
 	});
 
 	element.addEventListener("focus", function(e){
@@ -164,6 +172,30 @@ Edit.prototype.focusScrollAdjust = function(cell){
 				this.table.rowManager.element.scrollTop += (rowEl.offsetTop + rowEl.offsetHeight - bottomEdge);
 			}
 		}
+
+		var leftEdge = this.table.rowManager.element.scrollLeft,
+		rightEdge = this.table.rowManager.element.clientWidth + this.table.rowManager.element.scrollLeft,
+		cellEl = cell.getElement(),
+		offset = cellEl.offsetLeft;
+
+		if(this.table.modExists("frozenColumns")){
+			leftEdge += parseInt(this.table.modules.frozenColumns.leftMargin);
+			rightEdge -= parseInt(this.table.modules.frozenColumns.rightMargin);
+		}
+
+		if(this.table.options.virtualDomHoz){
+			leftEdge -= parseInt(this.table.vdomHoz.vDomPadLeft);
+			rightEdge -= parseInt(this.table.vdomHoz.vDomPadLeft);
+		}
+
+		if(cellEl.offsetLeft < leftEdge){
+
+			this.table.rowManager.element.scrollLeft -= (leftEdge - cellEl.offsetLeft);
+		}else{
+			if(cellEl.offsetLeft + cellEl.offsetWidth  > rightEdge){
+				this.table.rowManager.element.scrollLeft += (cellEl.offsetLeft + cellEl.offsetWidth - rightEdge);
+			}
+		}
 	}
 };
 
@@ -194,7 +226,7 @@ Edit.prototype.edit = function(cell, e, forceEdit){
 
 			if(valid === true || self.table.options.validationMode === "highlight"){
 				self.clearEditor();
-				cell.setValue(value, true);
+
 
 				if(!cell.modules.edit){
 					cell.modules.edit = {};
@@ -206,12 +238,15 @@ Edit.prototype.edit = function(cell, e, forceEdit){
 					self.editedCells.push(cell);
 				}
 
+				cell.setValue(value, true);
+
 				if(self.table.options.dataTree && self.table.modExists("dataTree")){
 					self.table.modules.dataTree.checkForRestyle(cell);
 				}
 
 				if(valid !== true){
 					element.classList.add("tabulator-validation-fail");
+					self.table.options.validationFailed.call(self.table, cell.getComponent(), value, valid);
 					return false;
 				}
 
@@ -432,13 +467,17 @@ Edit.prototype.clearEdited = function(cell){
 	var editIndex;
 
 	if(cell.modules.edit && cell.modules.edit.edited){
-		cell.modules.validate.invalid = false;
+		cell.modules.edit.edited = false;
 
-		editIndex = this.editedCells.indexOf(cell);
-
-		if(editIndex > -1){
-			this.editedCells.splice(editIndex, 1);
+		if(cell.modules.validate){
+			cell.modules.validate.invalid = false;
 		}
+	}
+
+	editIndex = this.editedCells.indexOf(cell);
+
+	if(editIndex > -1){
+		this.editedCells.splice(editIndex, 1);
 	}
 };
 
@@ -502,6 +541,11 @@ Edit.prototype.editors = {
 				case 27:
 				cancel();
 				break;
+
+				case 35:
+				case 36:
+				e.stopPropagation();
+				break;
 			}
 		});
 
@@ -547,6 +591,10 @@ Edit.prototype.editors = {
         onRendered(function(){
         	input.focus({preventScroll: true});
         	input.style.height = "100%";
+
+        	input.scrollHeight;
+        	input.style.height = input.scrollHeight + "px";
+        	cell.getRow().normalizeHeight();
         });
 
         function onChange(e){
@@ -603,6 +651,11 @@ Edit.prototype.editors = {
         			e.stopImmediatePropagation();
         			e.stopPropagation();
         		}
+        		break;
+
+        		case 35:
+        		case 36:
+        		e.stopPropagation();
         		break;
         	}
         });
@@ -703,6 +756,11 @@ Edit.prototype.editors = {
 					e.stopPropagation();
 				}
 				break;
+
+				case 35:
+				case 36:
+				e.stopPropagation();
+				break;
 			}
 		});
 
@@ -800,7 +858,7 @@ Edit.prototype.editors = {
 		cellEl = cell.getElement(),
 		initialValue = cell.getValue(),
 		vertNav = editorParams.verticalNavigation || "editor",
-		initialDisplayValue = typeof initialValue !== "undefined" || initialValue === null ? initialValue : (typeof editorParams.defaultValue !== "undefined" ? editorParams.defaultValue : []),
+		initialDisplayValue = typeof initialValue !== "undefined" || initialValue === null ? (Array.isArray(initialValue) ? initialValue : [initialValue]) : (typeof editorParams.defaultValue !== "undefined" ? editorParams.defaultValue : []),
 		input = document.createElement("input"),
 		listEl = document.createElement("div"),
 		multiselect = editorParams.multiselect,
@@ -808,9 +866,10 @@ Edit.prototype.editors = {
 		currentItem = {},
 		displayItems = [],
 		currentItems = [],
-		blurable = true;
-
-		this.table.rowManager.element.addEventListener("scroll", cancelItem);
+		blurable = true,
+		blockListShow = false,
+		searchWord = "",
+		searchWordTimeout = null;
 
 		if(Array.isArray(editorParams) || (!Array.isArray(editorParams) && typeof editorParams === "object" && !editorParams.values)){
 			console.warn("DEPRECATION WARNING - values for the select editor must now be passed into the values property of the editorParams object, not as the editorParams object");
@@ -836,21 +895,11 @@ Edit.prototype.editors = {
 						output[val] = true;
 					}
 				});
-
-				if(editorParams.sortValuesList){
-					if(editorParams.sortValuesList == "asc"){
-						output = Object.keys(output).sort();
-					}else{
-						output = Object.keys(output).sort().reverse();
-					}
-				}else{
-					output = Object.keys(output);
-				}
 			}else{
 				console.warn("unable to find matching column to create select lookup list:", field);
 			}
 
-			return output;
+			return Object.keys(output);
 		}
 
 		function parseItems(inputValues, curentValues){
@@ -949,6 +998,21 @@ Edit.prototype.editors = {
 				}
 			}
 
+			if(editorParams.sortValuesList){
+				dataList.sort((a, b) => {
+					return a.label < b.label ? -1 : (a.label > b.label ? 1 : 0);
+				});
+
+				displayList.sort((a, b) => {
+					return a.label < b.label ? -1 : (a.label > b.label ? 1 : 0);
+				});
+
+				if(editorParams.sortValuesList !== "asc"){
+					dataList.reverse();
+					displayList.reverse();
+				}
+			}
+
 			dataItems = dataList;
 			displayItems = displayList;
 
@@ -975,6 +1039,12 @@ Edit.prototype.editors = {
 						el.innerHTML = item.label === "" ? "&nbsp;" : item.label;
 
 						el.addEventListener("click", function(){
+							blockListShow = true;
+
+							setTimeout(() => {
+								blockListShow = false;
+							}, 10);
+
 							// setCurrentItem(item);
 							// chooseItem();
 							if(multiselect){
@@ -1041,6 +1111,10 @@ Edit.prototype.editors = {
 					item.element.classList.add("active");
 				}
 			}
+
+			if(item && item.element && item.element.scrollIntoView){
+				item.element.scrollIntoView({behavior: 'smooth', block: 'nearest', inline: 'start'});
+			}
 		}
 
 
@@ -1095,6 +1169,7 @@ Edit.prototype.editors = {
 			}
 
 			fillInput();
+
 		}
 
 		function chooseItem(item){
@@ -1105,19 +1180,26 @@ Edit.prototype.editors = {
 			}
 
 			if(item){
+				input.value = item.label;
 				success(item.value);
 			}
+
+			initialDisplayValue = [item.value];
 		}
 
 
-		function chooseItems(){
-			hideList();
+		function chooseItems(silent){
+			if(!silent){
+				hideList();
+			}
 
 			var output = [];
 
 			currentItems.forEach((item) => {
 				output.push(item.value);
 			});
+
+			initialDisplayValue = output;
 
 			success(output);
 		}
@@ -1129,8 +1211,21 @@ Edit.prototype.editors = {
 				output.push(item.label);
 			});
 
-
 			input.value = output.join(", ");
+
+			if(self.currentCell === false){
+				chooseItems(true);
+			}
+		}
+
+
+		function unsetItems() {
+
+			var len = currentItems.length;
+
+			for(let i = 0; i < len; i++){
+				unsetItem(0);
+			}
 		}
 
 		function cancelItem(){
@@ -1139,8 +1234,9 @@ Edit.prototype.editors = {
 		}
 
 		function showList(){
-			if(!listEl.parentNode){
+			currentItems = [];
 
+			if(!listEl.parentNode){
 				if(editorParams.values === true){
 					parseItems(getUniqueColumnValues(), initialDisplayValue);
 				}else if(typeof editorParams.values === "string"){
@@ -1182,6 +1278,26 @@ Edit.prototype.editors = {
 			self.table.rowManager.element.removeEventListener("scroll", cancelItem);
 		}
 
+		function scrollTovalue(char){
+
+			clearTimeout(searchWordTimeout);
+
+			var character = String.fromCharCode(event.keyCode).toLowerCase();
+			searchWord += character.toLowerCase();
+
+			var match = dataItems.find((item) => {
+				return typeof item.label !== "undefined" && item.label.toLowerCase().startsWith(searchWord);
+			});
+
+			if(match){
+				setCurrentItem(match, !multiselect);
+			}
+
+			searchWordTimeout = setTimeout(() => {
+				searchWord = "";
+			}, 800)
+		}
+
 		//style input
 		input.setAttribute("type", "text");
 
@@ -1211,6 +1327,13 @@ Edit.prototype.editors = {
 		// }else{
 		// 	parseItems(editorParams.values || [], initialValue);
 		// }
+
+		input.addEventListener("search", function(e){
+			if(!input.value){
+				unsetItems();
+				chooseItems();
+			}
+		});
 
 		//allow key based navigation
 		input.addEventListener("keydown", function(e){
@@ -1270,6 +1393,18 @@ Edit.prototype.editors = {
 				case 27: //escape
 				cancelItem();
 				break;
+
+				case 9: //tab
+				break;
+
+				default:
+				if(self.currentCell === false){
+					e.preventDefault();
+				}
+
+				if(e.keyCode >= 38 && e.keyCode <= 90){
+					scrollTovalue(e.keyCode);
+				}
 			}
 		});
 
@@ -1284,7 +1419,9 @@ Edit.prototype.editors = {
 		});
 
 		input.addEventListener("focus", function(e){
-			showList();
+			if(!blockListShow){
+				showList();
+			}
 		});
 
 		//style list element
@@ -1295,6 +1432,10 @@ Edit.prototype.editors = {
 			input.style.height = "100%";
 			input.focus({preventScroll: true});
 		});
+
+		setTimeout(() => {
+			this.table.rowManager.element.addEventListener("scroll", cancelItem);
+		}, 10);
 
 		return input;
 	},
@@ -1314,8 +1455,6 @@ Edit.prototype.editors = {
 		currentItem = false,
 		blurable = true,
 		uniqueColumnValues = false;
-
-		this.table.rowManager.element.addEventListener("scroll", cancelItem);
 
 		//style input
 		input.setAttribute("type", "search");
@@ -1584,6 +1723,8 @@ Edit.prototype.editors = {
 
 		function showList(){
 			if(!listEl.parentNode){
+
+				console.log("show", initialDisplayValue)
 				while(listEl.firstChild) listEl.removeChild(listEl.firstChild);
 
 				var offset = Tabulator.prototype.helpers.elOffset(cellEl);
@@ -1605,6 +1746,10 @@ Edit.prototype.editors = {
 
 			if(item && item.element){
 				item.element.classList.add("active");
+			}
+
+			if(item && item.element && item.element.scrollIntoView){
+				item.element.scrollIntoView({behavior: 'smooth', block: 'nearest', inline: 'start'});
 			}
 		}
 
@@ -1735,6 +1880,14 @@ Edit.prototype.editors = {
 		if(editorParams.mask){
 			this.table.modules.edit.maskInput(input, editorParams);
 		}
+
+		setTimeout(() => {
+			this.table.rowManager.element.addEventListener("scroll", cancelItem);
+		}, 10);
+
+		genUniqueColumnValues();
+		input.value = initialDisplayValue;
+		filterList(initialDisplayValue, true);
 
 		return input;
 	},
@@ -1899,7 +2052,9 @@ Edit.prototype.editors = {
 
 		//set new value
 		function updateValue(){
-			var calcVal = (percent * Math.round(bar.offsetWidth / (element.clientWidth/100))) + min;
+			var style = window.getComputedStyle(element, null);
+
+			var calcVal = (percent * Math.round(bar.offsetWidth / ((element.clientWidth - parseInt(style.getPropertyValue("padding-left")) - parseInt(style.getPropertyValue("padding-right")))/100))) + min;
 			success(calcVal);
 			element.setAttribute("aria-valuenow", calcVal);
 			element.setAttribute("aria-label", value);
@@ -2049,6 +2204,10 @@ Edit.prototype.editors = {
 		}
 
 		input.checked = value === true || value === "true" || value === "True" || value === 1;
+
+		onRendered(function(){
+			input.focus();
+		});
 
 		function setValue(blur){
 			if(tristate){

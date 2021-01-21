@@ -134,7 +134,7 @@ Filter.prototype.generateHeaderFilterElement = function(column, initialValue, re
 
 		//set empty value function
 		column.modules.filter.emptyFunc = column.definition.headerFilterEmptyCheck || function(value){
-			return !value && value !== "0";
+			return !value && value !== "0" && value !== 0;
 		};
 
 		filterElement = document.createElement("div");
@@ -243,7 +243,7 @@ Filter.prototype.generateHeaderFilterElement = function(column, initialValue, re
 					this.table.rowManager.scrollHorizontal(left);
 					this.table.columnManager.scrollHorizontal(left);
 				}
-			})
+			});
 
 			//live update filters as user types
 			typingTimer = false;
@@ -457,8 +457,6 @@ Filter.prototype.findFilter = function(filter){
 
 	filter.func = filterFunc;
 
-
-
 	return filter.func ? filter : false;
 };
 
@@ -475,7 +473,7 @@ Filter.prototype.findSubFilters = function(filters){
 	});
 
 	return output.length ? output : false;
-}
+};
 
 
 //get all filters
@@ -491,7 +489,7 @@ Filter.prototype.getFilters = function(all, ajax){
 			if(typeof item.type == "function"){
 				item.type = "function";
 			}
-		})
+		});
 	}
 
 	output = output.concat(this.filtersToArray(this.filterList, ajax));
@@ -522,7 +520,7 @@ Filter.prototype.filtersToArray = function(filterList, ajax){
 	});
 
 	return output;
-}
+};
 
 //get all filters
 Filter.prototype.getHeaderFilters = function(){
@@ -595,7 +593,9 @@ Filter.prototype.clearHeaderFilter = function(){
 	self.prevHeaderFilterChangeCheck = "{}";
 
 	this.headerFilterColumns.forEach(function(column){
-		column.modules.filter.value = null;
+		if(typeof column.modules.filter.value !== "undefined"){
+			delete column.modules.filter.value;
+		}
 		column.modules.filter.prevSuccess = undefined;
 		self.reloadHeaderFilter(column);
 	});
@@ -817,7 +817,7 @@ Filter.prototype.filters ={
 	//in array
 	"in":function(filterVal, rowVal, rowData, filterParams){
 		if(Array.isArray(filterVal)){
-			return filterVal.indexOf(rowVal) > -1;
+			return filterVal.length ? filterVal.indexOf(rowVal) > -1 : true;
 		}else{
 			console.warn("Filter Error - filter value is not an array:", filterVal);
 			return false;

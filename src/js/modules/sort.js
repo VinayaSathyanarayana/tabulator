@@ -41,9 +41,18 @@ Sort.prototype.initializeColumn = function(column, content){
 
 
 		arrowEl = document.createElement("div");
-		arrowEl.classList.add("tabulator-arrow");
+		arrowEl.classList.add("tabulator-col-sorter");
+
+		if(typeof this.table.options.headerSortElement == "object"){
+			arrowEl.appendChild(this.table.options.headerSortElement);
+		}else{
+			arrowEl.innerHTML = this.table.options.headerSortElement;
+		}
+
 		//create sorter arrow
 		content.appendChild(arrowEl);
+
+		column.modules.sort.element = arrowEl;
 
 		//sort on click
 		colEl.addEventListener("click", function(e){
@@ -334,12 +343,25 @@ Sort.prototype.sorters = {
 	//sort numbers
 	number:function(a, b, aRow, bRow, column, dir, params){
 		var alignEmptyValues = params.alignEmptyValues;
-		var decimal = params.decimalSeparator || ".";
-		var thousand = params.thousandSeparator || ",";
+		var decimal = params.decimalSeparator;
+		var thousand = params.thousandSeparator;
 		var emptyAlign = 0;
 
-		a = parseFloat(String(a).split(thousand).join("").split(decimal).join("."));
-		b = parseFloat(String(b).split(thousand).join("").split(decimal).join("."));
+		a = String(a);
+		b = String(b);
+
+		if(thousand){
+			a = a.split(thousand).join("");
+			b = b.split(thousand).join("");
+		}
+
+		if(decimal){
+			a = a.split(decimal).join(".");
+			b = b.split(decimal).join(".");
+		}
+
+		a = parseFloat(a);
+		b = parseFloat(b);
 
 		//handle non numeric values
 		if(isNaN(a)){
